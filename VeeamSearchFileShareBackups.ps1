@@ -20,12 +20,13 @@ Import-Module $RequiredModule -ErrorAction Stop
 # Interactive Veeam NAS/File Share Backup Search
 
 $VeeamServer = "<your Veeam server FQDN>"
-$CredentialPath = "<path to encrypted credential file>"
+$CredentialPath = "<path to credential file location>"
 
 if (-not (Test-Path $CredentialPath)) {
     Write-Output "Credential file not found: $CredentialPath"
-    Write-Output 'Create it first with:'
-    Write-Output 'Get-Credential -UserName "DOMAIN\svc-veeam-search" | Export-Clixml -Path "C:\Secure\veeam-search-credential.xml"'
+    Write-Output "Create it first with:"
+    Write-Output ('New-Item -ItemType Directory -Path "{0}" -Force | Out-Null' -f (Split-Path -Path $CredentialPath -Parent))
+    Write-Output ('Get-Credential -UserName "DOMAIN\svc-veeam-search" | Export-Clixml -Path "{0}"' -f $CredentialPath)
     return
 }
 
