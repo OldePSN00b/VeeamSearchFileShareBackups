@@ -24,12 +24,12 @@ $CredentialPath = "<path to encrypted credential file>"
 
 if (-not (Test-Path $CredentialPath)) {
     Write-Output "Credential file not found: $CredentialPath"
-    Write-Output "Create it first with Export-Clixml."
+    Write-Output 'Create it first with:'
+    Write-Output 'Get-Credential -UserName "DOMAIN\svc-veeam-search" | Export-Clixml -Path "C:\Secure\veeam-search-credential.xml"'
     return
 }
 
 $Credential = Import-Clixml -Path $CredentialPath
-
 Connect-VBRServer -Server $VeeamServer -Credential $Credential
 
 try {
@@ -59,7 +59,9 @@ try {
     )
 
     $backup = $backups[[int]$selection - 1]
+
     $SearchText = Read-Host "Enter file/folder search text"
+    $SearchRoot = Read-Host "Optional folder path to search under, example \Departments\Finance. Press Enter for whole backup"
 
     $StartDateInput = Read-Host "Optional FROM date, example 2025-12-01. Press Enter to skip"
     $EndDateInput   = Read-Host "Optional TO date, example 2025-12-31. Press Enter to skip"
@@ -78,6 +80,10 @@ try {
     Write-Output ""
     Write-Output ("Selected backup: {0}" -f $backup.Name)
     Write-Output ("Searching for: {0}" -f $SearchText)
+
+    if (-not [string]::IsNullOrWhiteSpace($SearchRoot)) {
+        Write-Output ("Search root: {0}" -f $SearchRoot)
+    }
 
     if ($StartDate) {
         Write-Output ("From date: {0}" -f $StartDate)
@@ -112,7 +118,33 @@ try {
         try {
             $session = Start-VBRUnstructuredBackupFLRSession -RestorePoint $rp
 
-            $searchResults = Get-VBRUnstructuredBackupFLRItem -Session $session -Recurse |
+            if ([string]::IsNullOrWhiteSpace($SearchRoot)) {
+                Write-Output "Searching entire restore point. This may take a while..."
+
+                $itemsToSearch = Get-VBRUnstructuredBackupFLRItem -Session $session -Recurse
+            }
+            else {
+                Write-Output ("Locating search root: {0}" -f $SearchRoot)
+
+                $normalizedSearchRoot = $SearchRoot.TrimEnd("\")
+
+                $rootFolder = Get-VBRUnstructuredBackupFLRItem -Session $session -Recurse |
+                    Where-Object {
+                        $_.Path.TrimEnd("\") -eq $normalizedSearchRoot
+                    } |
+                    Select-Object -First 1
+
+                if (-not $rootFolder) {
+                    Write-Output ("Search root not found in restore point: {0}" -f $SearchRoot)
+                    continue
+                }
+
+                Write-Output ("Searching under: {0}" -f $rootFolder.Path)
+
+                $itemsToSearch = Get-VBRUnstructuredBackupFLRItem -Session $session -Folder $rootFolder -Recurse
+            }
+
+            $searchResults = $itemsToSearch |
                 Where-Object {
                     $_.Name.ToLower().Contains($SearchTextLower) -or
                     $_.Path.ToLower().Contains($SearchTextLower)
