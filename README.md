@@ -1,1 +1,1 @@
-This script searches through Veeam File Share backups. The GUI is woefully inelegant for searching for one missing file or folder without having to search each individual backup point. This requires the Veeam PowerShell module.
+This script searches through Veeam File Share backups. The GUI is woefully inelegant for searching for one missing file or folder without having to search each individual backup point. This was written over time by ChatGPT and requires the Veeam PowerShell module.
