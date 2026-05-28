@@ -63,7 +63,13 @@ try {
 
     $backup = $backups[[int]$selection - 1]
 
-    $SearchText = Read-Host "Enter file/folder search text"
+    $SearchText = Read-Host "Enter search text"
+
+    $SearchType = Read-Host "Search type: File, Folder, or Any. Default is Folder"
+
+    if ([string]::IsNullOrWhiteSpace($SearchType)) {
+        $SearchType = "Folder"
+    }
 
     $SearchRoot = Read-Host "Optional starting folder path, example \Accounting\2nd Folder\3rd Folder. Press Enter for whole backup"
 
@@ -131,15 +137,6 @@ try {
 
                     $normalizedPart = $part.Trim()
 
-                    Write-Output "Available folders at this level:"
-
-                    $currentItems |
-                        Where-Object {
-                            $_.Type -like "*Folder*" -or $_.IsDirectory
-                        } |
-                        Select-Object Name, Path, Type |
-                        Format-Table -AutoSize
-
                     $searchRootFolder = $currentItems |
                         Where-Object {
 
@@ -189,20 +186,33 @@ try {
 
             foreach ($item in $rootItems) {
 
-                if (
+                $itemIsFolder = $item.Type -like "*Folder*" -or $item.IsDirectory
+                $itemIsFile = -not $itemIsFolder
+
+                $typeMatches =
+                    ($SearchType -ieq "Any") -or
+                    ($SearchType -ieq "Folder" -and $itemIsFolder) -or
+                    ($SearchType -ieq "File" -and $itemIsFile)
+
+                $textMatches =
                     $item.Name.ToLower().Contains($SearchTextLower) -or
                     $item.Path.ToLower().Contains($SearchTextLower)
-                ) {
-                    $searchResults = @($item)
-                    break
+
+                if ($typeMatches -and $textMatches) {
+
+                    if (-not $searchResults) {
+                        $searchResults = @()
+                    }
+
+                    $searchResults += $item
                 }
 
-                if ($item.Type -like "*Folder*" -or $item.IsDirectory) {
+                if ($itemIsFolder) {
                     $foldersToSearch.Enqueue($item)
                 }
             }
 
-            while ($foldersToSearch.Count -gt 0 -and -not $searchResults) {
+            while ($foldersToSearch.Count -gt 0) {
 
                 $currentFolder = $foldersToSearch.Dequeue()
 
@@ -214,15 +224,28 @@ try {
 
                 foreach ($item in $childItems) {
 
-                    if (
+                    $itemIsFolder = $item.Type -like "*Folder*" -or $item.IsDirectory
+                    $itemIsFile = -not $itemIsFolder
+
+                    $typeMatches =
+                        ($SearchType -ieq "Any") -or
+                        ($SearchType -ieq "Folder" -and $itemIsFolder) -or
+                        ($SearchType -ieq "File" -and $itemIsFile)
+
+                    $textMatches =
                         $item.Name.ToLower().Contains($SearchTextLower) -or
                         $item.Path.ToLower().Contains($SearchTextLower)
-                    ) {
-                        $searchResults = @($item)
-                        break
+
+                    if ($typeMatches -and $textMatches) {
+
+                        if (-not $searchResults) {
+                            $searchResults = @()
+                        }
+
+                        $searchResults += $item
                     }
 
-                    if ($item.Type -like "*Folder*" -or $item.IsDirectory) {
+                    if ($itemIsFolder) {
                         $foldersToSearch.Enqueue($item)
                     }
                 }
@@ -231,17 +254,135 @@ try {
             if ($searchResults) {
 
                 Write-Output ""
-                Write-Output ("Match found in restore point: {0}" -f $rp.CreationTime)
+                Write-Output ("Found {0} matching item(s) in restore point: {1}" -f $searchResults.Count, $rp.CreationTime)
                 Write-Output ""
 
-                $searchResults |
-                    Select-Object `
-                        @{Name="RestorePointTime"; Expression={$rp.CreationTime}},
-                        Name,
-                        Path,
-                        Size,
-                        Type |
-                    Format-Table -AutoSize
+                for ($i = 0; $i -lt $searchResults.Count; $i++) {
+
+                    $result = $searchResults[$i]
+
+                    Write-Output ("[{0}] {1}" -f ($i + 1), $result.Name)
+                    Write-Output ("     Path: {0}" -f $result.Path)
+                    Write-Output ("     Type: {0}" -f $result.Type)
+                    Write-Output ""
+                }
+
+                do {
+                    $restoreSelection = Read-Host "Enter the number of the item to restore, or press Enter to skip"
+
+                    if ([string]::IsNullOrWhiteSpace($restoreSelection)) {
+                        break
+                    }
+
+                }
+                until (
+                    $restoreSelection -as [int] -and
+                    [int]$restoreSelection -ge 1 -and
+                    [int]$restoreSelection -le $searchResults.Count
+                )
+
+                if (-not [string]::IsNullOrWhiteSpace($restoreSelection)) {
+
+                    $selectedResult = $searchResults[[int]$restoreSelection - 1]
+
+                    $restoreChoice = Read-Host "Restore ONLY this selected item to a sibling Restored_<name> folder? Type RESTORE to continue"
+
+                    if ($restoreChoice -eq "RESTORE") {
+
+                        $safeRecoveredName = $selectedResult.Name -replace '[\\/:*?"<>|]', '_'
+                        $restoredFolderName = "Restored_{0}" -f $safeRecoveredName
+
+                        $originalPath = $selectedResult.Path
+
+                        if ([string]::IsNullOrWhiteSpace($originalPath)) {
+                            Write-Output "The selected item does not have a usable Path value."
+                            break
+                        }
+
+                        $originalPath = $originalPath.TrimEnd("\")
+
+                        $parentPath = Split-Path -Path $originalPath -Parent
+
+                        if ([string]::IsNullOrWhiteSpace($parentPath)) {
+                            Write-Output "Could not determine parent path from:"
+                            Write-Output $originalPath
+                            break
+                        }
+
+                        $destinationPath = Join-Path `
+                            -Path $parentPath `
+                            -ChildPath $restoredFolderName
+
+                        $pathServerName = $null
+
+                        if ($selectedResult.Path -match '^\\\\([^\\]+)\\') {
+                            $pathServerName = $Matches[1]
+                        }
+
+                        $targetServer = $null
+
+                        if ($pathServerName) {
+
+                            $targetServer = Get-VBRUnstructuredServer |
+                                Where-Object {
+                                    $_.Name -ieq $pathServerName -or
+                                    $_.Name -like "$pathServerName.*"
+                                } |
+                                Select-Object -First 1
+                        }
+
+                        if (-not $targetServer) {
+
+                            $unstructuredServers = Get-VBRUnstructuredServer | Sort-Object Name
+
+                            Write-Output ""
+                            Write-Output "Could not auto-detect target restore server."
+
+                            for ($i = 0; $i -lt $unstructuredServers.Count; $i++) {
+                                Write-Output ("[{0}] {1}" -f ($i + 1), $unstructuredServers[$i].Name)
+                            }
+
+                            Write-Output ""
+
+                            do {
+                                $serverSelection = Read-Host "Enter the number of the target restore server"
+                            }
+                            until (
+                                $serverSelection -as [int] -and
+                                [int]$serverSelection -ge 1 -and
+                                [int]$serverSelection -le $unstructuredServers.Count
+                            )
+
+                            $targetServer = $unstructuredServers[[int]$serverSelection - 1]
+                        }
+                        else {
+                            Write-Output ("Auto-detected target restore server: {0}" -f $targetServer.Name)
+                        }
+
+                        Write-Output ""
+                        Write-Output "Restore summary:"
+                        Write-Output ("Source item:      {0}" -f $selectedResult.Path)
+                        Write-Output ("Destination path: {0}" -f $destinationPath)
+                        Write-Output ("Target server:    {0}" -f $targetServer.Name)
+                        Write-Output ""
+
+                        $finalConfirm = Read-Host "Type YES to restore ONLY this selected item"
+
+                        if ($finalConfirm -eq "YES") {
+
+                            $selectedResult |
+                                Save-VBRUnstructuredBackupFLRItem `
+                                    -Server $targetServer `
+                                    -Path $destinationPath `
+                                    -PreservePermissions
+
+                            Write-Output "Restore command completed."
+                        }
+                        else {
+                            Write-Output "Restore cancelled."
+                        }
+                    }
+                }
 
                 $found = $true
                 break
