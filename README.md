@@ -1,1 +1,1 @@
-Created this with ChatGPT to search Veeam File Share backup files for a specific text pattern, rather than having to use the GUI and browse through each restore point to find things. Requires Veeam PowerShell Module.
+This script searches through Veeam File Share backups. The GUI is woefully inelegant for searching for one missing file or folder without having to search each individual backup point. This requires the Veeam PowerShell module.
